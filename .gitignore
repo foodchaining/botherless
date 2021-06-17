@@ -1,6 +1,7 @@
 *
 !*/
 
+!/.github/workflows/release.yml
 !/.gitattributes
 !/.gitignore
 !/botherless.cmd

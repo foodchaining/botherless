@@ -1,0 +1,20 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Upload
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" "botherless.cmd#Botherless Security Script"
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
