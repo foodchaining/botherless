@@ -466,10 +466,14 @@ function ConfigureWDAC() {
 	$wdac = "$env:windir\System32\CodeIntegrity\SIPolicy.p7b"
 	$base = "$env:windir\schemas\CodeIntegrity\ExamplePolicies\AllowAll.xml"
 	$temp = (New-TemporaryFile).FullName
-	$null = ConvertFrom-CIPolicy -XmlFilePath $base -BinaryFilePath $temp
+	
+	try {
+		$null = ConvertFrom-CIPolicy -XmlFilePath $base -BinaryFilePath $temp
+	} catch
+		[System.Management.Automation.CommandNotFoundException]
+		{ return $VOID }
+	
 	$policy = Get-Content -Path $temp -Raw
-
-	$conf = @{"policy" = $policy; "psmode" = "ConstrainedLanguage" }
 
 	function getter {
 		try {
@@ -478,13 +482,12 @@ function ConfigureWDAC() {
 			[System.Management.Automation.ItemNotFoundException],
 			[System.UnauthorizedAccessException]
 			{ $actual = $null }
-		return @{ "policy" = $actual
-			"psmode" = $ExecutionContext.SessionState.LanguageMode }
+		return $actual
 	}
 	
 	$got = getter
 
-	if (EqualHashtables $got $conf) {
+	if ($got -ceq $policy) {
 		return $null
 	}
 
@@ -496,7 +499,7 @@ function ConfigureWDAC() {
 
 	$got = getter
 	
-	return EqualHashtables $got $conf
+	return $got -ceq $policy
 }
 
 function ConfigureOptionalFeature($feature, $value) {
