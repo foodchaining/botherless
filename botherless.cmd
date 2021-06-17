@@ -580,9 +580,9 @@ function ConfigureOptionalFeature($feature, $value) {
 
 	try {
 		if ($value) {
-			$null = Enable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart
+			$null = Enable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart -WarningAction "SilentlyContinue"
 		} else {
-			$null = Disable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart
+			$null = Disable-WindowsOptionalFeature -Online -FeatureName $feature -NoRestart -WarningAction "SilentlyContinue"
 		}
 	} catch 
 		[System.Runtime.InteropServices.COMException]
