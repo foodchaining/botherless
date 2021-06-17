@@ -18,7 +18,7 @@ Set-StrictMode -Version 3.0
 
 $BLVersion = "0.1.0.1"
 
-$VOID = @{}
+$VOID = New-Object -TypeName PSObject
 
 $BLAllFlags = @{
 	"-NoIntroWarning" = ""
@@ -126,23 +126,82 @@ function DumpReport($code, $info, $indent = 0) {
 	Write-Host "] $info"
 }
 
-function EqualValuesTyped($a0, $a1) {
-	if (($a0 -eq $null) -and ($a1 -eq $null)) {
+function DeepEqual($a0, $a1, [scriptblock]$equality) {
+
+	if (($null -eq $a0) -and ($null -eq $a1)) {
 		return $true
 	}
-	return ($a0 -ceq $a1) -and ($a0.GetType() -ceq $a1.GetType())
-}
-
-function EqualHashtables($a0, $a1) {
-	if ($a0.Count -ne $a1.Count) {
+	if (($null -eq $a0) -or ($null -eq $a1)) {
 		return $false
 	}
-	foreach ($it in $a0.GetEnumerator()) {
-		if ($a1[$it.key] -cne $it.value) {
+
+	if (($a0 -is [array]) -and ($a1 -is [array])) {
+		if ($a0.Length -ne $a1.Length) {
 			return $false
 		}
+		for ($i = 0; $i -lt $a0.Length; ++$i) {
+			if (!(DeepEqual $a0[$i] $a1[$i] $equality)) {
+				return $false
+			}
+		}
+		return $true
 	}
-	return $true
+	if (($a0 -is [array]) -or ($a1 -is [array])) {
+		return $false
+	}
+
+	if (($a0 -is [hashtable]) -and ($a1 -is [hashtable])) {
+		if ($a0.Count -ne $a1.Count) {
+			return $false
+		}
+		foreach ($it in $a0.GetEnumerator()) {
+			if (!(DeepEqual $it.value $a1[$it.key] $equality)) {
+				return $false
+			}
+		}
+		return $true
+	}
+	if (($a0 -is [hashtable]) -or ($a1 -is [hashtable])) {
+		return $false
+	}
+	
+	return & $equality $a0 $a1
+}
+
+function Equal($a0, $a1) {
+
+	function equality($a0, $a1) {
+		return $a0 -eq $a1
+	}
+
+	return DeepEqual $a0 $a1 ${function:equality}
+}
+
+function EqualI($a0, $a1) {
+
+	function equality($a0, $a1) {
+		return $a0 -ieq $a1
+	}
+
+	return DeepEqual $a0 $a1 ${function:equality}
+}
+
+function EqualC($a0, $a1) {
+
+	function equality($a0, $a1) {
+		return $a0 -ceq $a1
+	}
+
+	return DeepEqual $a0 $a1 ${function:equality}
+}
+
+function EqualCT($a0, $a1) {
+
+	function equality($a0, $a1) {
+		return ($a0.GetType() -eq $a1.GetType()) -and ($a0 -ceq $a1)
+	}
+
+	return DeepEqual $a0 $a1 ${function:equality}
 }
 
 function Report($report, $info) {
@@ -213,7 +272,7 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	
 	$got = getter
 
-	if (EqualValuesTyped $got $value) {
+	if (EqualCT $got $value) {
 		return $null
 	}
 
@@ -233,7 +292,7 @@ function ConfigureRegistry($item, $property, $type, $value) {
 
 	$got = getter
 	
-	return EqualValuesTyped $got $value
+	return EqualCT $got $value
 }
 
 function ConfigureMpPreference($preference, $value) {
@@ -245,7 +304,7 @@ function ConfigureMpPreference($preference, $value) {
 	
 	$got = getter
 
-	if ($got -ceq $value) {
+	if (EqualC $got $value) {
 		return $null
 	}
 
@@ -258,7 +317,7 @@ function ConfigureMpPreference($preference, $value) {
 
 	$got = getter
 	
-	return $got -ceq $value
+	return EqualC $got $value
 }
 
 function ConfigureASRRules($rules) {
@@ -279,7 +338,7 @@ function ConfigureASRRules($rules) {
 	
 	$got = getter
 
-	if (EqualHashtables $got $rules) {
+	if (Equal $got $rules) {
 		return $null
 	}
 
@@ -291,7 +350,7 @@ function ConfigureASRRules($rules) {
 
 	$got = getter
 	
-	return EqualHashtables $got $rules
+	return Equal $got $rules
 }
 
 function ConfigureExploitMitigations($info) {
@@ -331,7 +390,7 @@ function ConfigureExploitMitigations($info) {
 	
 	$got = getter
 
-	if (EqualHashtables $got $base) {
+	if (EqualI $got $base) {
 		return $null
 	}
 
@@ -372,7 +431,7 @@ function ConfigureExploitMitigations($info) {
 
 	$got = getter
 	
-	return EqualHashtables $got $base
+	return EqualI $got $base
 }
 
 function ConfigureBootOption($option, $value) {
@@ -382,7 +441,7 @@ function ConfigureBootOption($option, $value) {
 	function getter {
 		$pattern = '^' + [regex]::escape($option) + '\s+(\w+)$'
 		$info = (& $bcdedit /enum "{current}") | Select-String -Pattern $pattern
-		if (($info -ne $null) -and ($info.Matches.Length -eq 1)) {
+		if (($null -ne $info) -and ($info.Matches.Length -eq 1)) {
 			return $info.Matches[0].Groups[1].Value
 		}
 		return $null
@@ -404,7 +463,7 @@ function ConfigureBootOption($option, $value) {
 function ConfigurePowerShellPolicy($value) {
 	
 	function getter {
-		$got = Get-ExecutionPolicy -Scope LocalMachine
+		$got = Get-ExecutionPolicy -Scope "LocalMachine"
 		return $got
 	}
 	
@@ -415,7 +474,7 @@ function ConfigurePowerShellPolicy($value) {
 	}
 
 	try {
-		Set-ExecutionPolicy -ExecutionPolicy $value -Scope LocalMachine -Force
+		Set-ExecutionPolicy -ExecutionPolicy $value -Scope "LocalMachine" -Force
 	} catch 
 		[System.UnauthorizedAccessException]
 		{ }
@@ -432,7 +491,7 @@ function ConfigureService($name, $startup, $state) {
 	function getter {
 		$service = Get-Service -Name $name
 		$got = @{ "startup" = $service.StartType }
-		if ($state -eq $null) {
+		if ($null -eq $state) {
 			$got["state"] = $null
 		} else {
 			$got["state"] = $service.Status
@@ -442,12 +501,12 @@ function ConfigureService($name, $startup, $state) {
 	
 	$got = getter
 
-	if (EqualHashtables $got $conf) {
+	if (EqualI $got $conf) {
 		return $null
 	}
 
 	try {
-		if ($state -eq $null) {
+		if ($null -eq $state) {
 			Set-Service -Name $name -StartupType $startup
 		} else {
 			Set-Service -Name $name -StartupType $startup -Status $state
@@ -458,7 +517,7 @@ function ConfigureService($name, $startup, $state) {
 
 	$got = getter
 	
-	return EqualHashtables $got $conf
+	return EqualI $got $conf
 }
 
 function ConfigureWDAC() {
@@ -729,7 +788,7 @@ function ConfigureAll {
 		((PCCheck ($AMStatus.NISEnabled -eq $true)), "NRI Engine is enabled"),
 		((PCCheck ($AMStatus.OnAccessProtectionEnabled -eq $true)), "File and program activity monitoring is enabled"),
 		((PCCheck ($AMStatus.RealTimeProtectionEnabled -eq $true)), "Real-time protection is enabled"),
-		((PCCheck ([string]$AMStatus.RealTimeScanDirection -ceq "0")), "Both incoming and outgoing files are scanned"),
+		((PCCheck ($AMStatus.RealTimeScanDirection -eq 0)), "Both incoming and outgoing files are scanned"),
 		((PCCheck ($AMStatus.AMRunningMode -ieq "Normal")), "Antimalware running mode is Normal"),
 		((PCCheck ($AMStatus.IsTamperProtected -eq $true)), "Windows Defender tamper protection is enabled")
 	)
