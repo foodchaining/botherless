@@ -82,50 +82,6 @@ function GetDesiredBlockingLevel {
 	}
 }
 
-function ReportToInt($report) {
-	switch ($report) {
-		$null { return 0 }
-		$true { return 1 }
-		$false { return 2 }
-		default { return 3 }
-	}
-}
-
-function PCCheck($report) {
-	if ($report) {
-		return $null
-	} else {
-		return $false
-	}
-}
-
-function DumpVersion {
-	Write-Host "Botherless Security Script Version" $BLVersion
-}
-
-function ConfirmWarning {
-	DumpVersion
-	try {
-		Write-Warning "This script can enable certain Windows built-in boot-critical security options (WDAC, VBS, HVCI, ELAM, DEP, DSE, etc) which in rare cases may render the system unbootable. Proceed with caution!" -WarningAction Inquire
-	} catch
-		[System.Management.Automation.ParentContainsErrorRecordException]
-		{ exit 1 }
-}
-
-function DumpReport($code, $info, $indent = 0) {
-	for ($i = 0; $i -lt $indent; ++$i) {
-		Write-Host " " -NoNewline
-	}
-	Write-Host "[" -NoNewline
-	switch ($code) {
-		0 { Write-Host "+" -NoNewline}
-		1 { Write-Host "+" -NoNewline -ForegroundColor Green }
-		2 { Write-Host "X" -NoNewline -ForegroundColor Red }
-		default { Write-Host "?" -NoNewline -ForegroundColor Yellow -BackgroundColor Magenta }
-	}
-	Write-Host "] $info"
-}
-
 function DeepEqual($a0, $a1, [scriptblock]$equality) {
 
 	if (($null -eq $a0) -and ($null -eq $a1)) {
@@ -204,6 +160,50 @@ function EqualCT($a0, $a1) {
 	return DeepEqual $a0 $a1 ${function:equality}
 }
 
+function DumpVersion {
+	Write-Host "Botherless Security Script Version" $BLVersion
+}
+
+function ConfirmWarning {
+	DumpVersion
+	try {
+		Write-Warning "This script can enable certain Windows built-in boot-critical security options (WDAC, VBS, HVCI, ELAM, DEP, DSE, etc) which in rare cases may render the system unbootable. Proceed with caution!" -WarningAction Inquire
+	} catch
+		[System.Management.Automation.ParentContainsErrorRecordException]
+		{ exit 1 }
+}
+
+function DumpReport($code, $info, $indent = 0) {
+	for ($i = 0; $i -lt $indent; ++$i) {
+		Write-Host " " -NoNewline
+	}
+	Write-Host "[" -NoNewline
+	switch ($code) {
+		0 { Write-Host "+" -NoNewline}
+		1 { Write-Host "+" -NoNewline -ForegroundColor Green }
+		2 { Write-Host "X" -NoNewline -ForegroundColor Red }
+		default { Write-Host "?" -NoNewline -ForegroundColor Yellow -BackgroundColor Magenta }
+	}
+	Write-Host "] $info"
+}
+
+function ReportToInt($report) {
+	switch ($report) {
+		$null { return 0 }
+		$true { return 1 }
+		$false { return 2 }
+		default { return 3 }
+	}
+}
+
+function PCCheck($report) {
+	if ($report) {
+		return $null
+	} else {
+		return $false
+	}
+}
+
 function Report($report, $info) {
 	DumpReport -code (ReportToInt $report) -info $info
 }
@@ -256,6 +256,10 @@ function ConfirmSecureBoot {
 		[System.UnauthorizedAccessException]
 		{ }
 	return $false
+}
+
+function GetBinaryContent($path) {
+	return Get-Content -Path $path -Raw -Encoding "Byte"
 }
 
 function ConfigureRegistry($item, $property, $type, $value) {
@@ -532,11 +536,11 @@ function ConfigureWDAC() {
 		[System.Management.Automation.CommandNotFoundException]
 		{ return $VOID }
 	
-	$policy = Get-Content -Path $temp -Raw
+	$policy = GetBinaryContent -path $temp
 
 	function getter {
 		try {
-			$actual = Get-Content -Path $wdac -Raw
+			$actual = GetBinaryContent -path $wdac
 		} catch 
 			[System.Management.Automation.ItemNotFoundException],
 			[System.UnauthorizedAccessException]
@@ -546,7 +550,7 @@ function ConfigureWDAC() {
 	
 	$got = getter
 
-	if ($got -ceq $policy) {
+	if (Equal $got $policy) {
 		return $null
 	}
 
@@ -558,7 +562,7 @@ function ConfigureWDAC() {
 
 	$got = getter
 	
-	return $got -ceq $policy
+	return Equal $got $policy
 }
 
 function ConfigureOptionalFeature($feature, $value) {
