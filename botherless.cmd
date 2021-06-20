@@ -14,11 +14,14 @@ PowerShell -Command "& {" ^
 :: P2kjEpbW5A
 
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version 3.0
+Set-StrictMode -Version "3.0"
 
-$BLVersion = "0.1.0.1"
+$BLVersion = "0.1.0"
 
-$VOID = New-Object -TypeName PSObject
+$VOID = New-Object -TypeName "PSObject"
+
+$ERRGET = New-Object -TypeName "PSObject"
+$ERRSET = New-Object -TypeName "PSObject"
 
 $BLAllFlags = @{
 	"-NoIntroWarning" = ""
@@ -91,6 +94,20 @@ function DeepEqual($a0, $a1, [scriptblock]$equality) {
 		return $false
 	}
 
+	if (($a0 -is [bool]) -and ($a1 -is [bool])) {
+		return $a0 -eq $a1
+	}
+	if (($a0 -is [bool]) -or ($a1 -is [bool])) {
+		return $false
+	}
+
+	if (($a0 -is [valuetype]) -and ($a1 -is [valuetype])) {
+		return & $equality $a0 $a1
+	}
+	if (($a0 -is [valuetype]) -or ($a1 -is [valuetype])) {
+		return $false
+	}	
+	
 	if (($a0 -is [array]) -and ($a1 -is [array])) {
 		if ($a0.Length -ne $a1.Length) {
 			return $false
@@ -121,7 +138,11 @@ function DeepEqual($a0, $a1, [scriptblock]$equality) {
 		return $false
 	}
 	
-	return & $equality $a0 $a1
+	if ($a0.GetType() -eq $a1.GetType()) {
+		return & $equality $a0 $a1
+	} else {
+		return $false
+	}
 }
 
 function Equal($a0, $a1) {
@@ -151,13 +172,22 @@ function EqualC($a0, $a1) {
 	return DeepEqual $a0 $a1 ${function:equality}
 }
 
-function EqualCT($a0, $a1) {
+function eq($a0, $a1) { return Equal $a0 $a1 }
+function ne($a0, $a1) { return !(Equal $a0 $a1) }
 
-	function equality($a0, $a1) {
-		return ($a0.GetType() -eq $a1.GetType()) -and ($a0 -ceq $a1)
-	}
+function ieq($a0, $a1) { return EqualI $a0 $a1 }
+function ceq($a0, $a1) { return EqualC $a0 $a1 }
 
-	return DeepEqual $a0 $a1 ${function:equality}
+function GetKind($value) {
+	if ($null -eq $value) {
+		return $null
+	} else {
+		return $value.GetType()
+	}	
+}
+
+function EqualKinds($a0, $a1) {
+	return (GetKind $a0) -eq (GetKind $a1)
 }
 
 function DumpVersion {
@@ -182,26 +212,33 @@ function DumpReport($code, $info, $indent = 0) {
 		0 { Write-Host "+" -NoNewline}
 		1 { Write-Host "+" -NoNewline -ForegroundColor Green }
 		2 { Write-Host "X" -NoNewline -ForegroundColor Red }
+		3 { Write-Host "R" -NoNewline -ForegroundColor Red }
+		4 { Write-Host "W" -NoNewline -ForegroundColor Red }
 		default { Write-Host "?" -NoNewline -ForegroundColor Yellow -BackgroundColor Magenta }
 	}
 	Write-Host "] $info"
 }
 
 function ReportToInt($report) {
-	switch ($report) {
-		$null { return 0 }
-		$true { return 1 }
-		$false { return 2 }
-		default { return 3 }
-	}
+	if (eq $null $report) 
+		{ return 0 }
+	if (eq $true $report) 
+		{ return 1 }
+	if (eq $false $report)
+		{ return 2 }
+	if (eq $ERRGET $report) 
+		{ return 3 }
+	if (eq $ERRSET $report) 
+		{ return 4 }
+	return 5
 }
 
 function PCCheck($report) {
-	if ($report) {
-		return $null
-	} else {
-		return $false
-	}
+	if (eq $true $report) 
+		{ return $null } 
+	if (eq $false $report) 
+		{ return $false }
+	return $ERRGET
 }
 
 function Report($report, $info) {
@@ -251,11 +288,11 @@ function HasHVCI {
 
 function ConfirmSecureBoot {
 	try {
-		return (Confirm-SecureBootUEFI) -eq $true
+		return eq (Confirm-SecureBootUEFI) $true
 	} catch
 		[System.UnauthorizedAccessException]
 		{ }
-	return $false
+	return $VOID
 }
 
 function GetBinaryContent($path) {
@@ -276,12 +313,12 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	
 	$got = getter
 
-	if (EqualCT $got $value) {
+	if ((ceq $got $value) -and (EqualKinds $got $value)) {
 		return $null
 	}
 
 	try {
-		if ($value -ne $VOID) {
+		if (ne $value $VOID) {
 			if (!(Test-Path $item)) {
 				$null = New-Item $item -Force
 			}
@@ -292,11 +329,11 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	} catch 
 		[System.Security.SecurityException],
 		[System.UnauthorizedAccessException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return EqualCT $got $value
+	return (ceq $got $value) -and (EqualKinds $got $value)
 }
 
 function ConfigureMpPreference($preference, $value) {
@@ -308,7 +345,7 @@ function ConfigureMpPreference($preference, $value) {
 	
 	$got = getter
 
-	if (EqualC $got $value) {
+	if (ceq $got $value) {
 		return $null
 	}
 
@@ -317,11 +354,11 @@ function ConfigureMpPreference($preference, $value) {
 		Set-MpPreference -ErrorAction "Stop" @parameters
 	} catch 
 		[Microsoft.Management.Infrastructure.CimException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return EqualC $got $value
+	return ceq $got $value
 }
 
 function ConfigureASRRules($rules) {
@@ -342,7 +379,7 @@ function ConfigureASRRules($rules) {
 	
 	$got = getter
 
-	if (Equal $got $rules) {
+	if (eq $got $rules) {
 		return $null
 	}
 
@@ -350,11 +387,11 @@ function ConfigureASRRules($rules) {
 		Set-MpPreference -ErrorAction "Stop" -AttackSurfaceReductionRules_Ids $rules.keys -AttackSurfaceReductionRules_Actions $rules.values
 	} catch 
 		[Microsoft.Management.Infrastructure.CimException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return Equal $got $rules
+	return eq $got $rules
 }
 
 function ConfigureExploitMitigations($info) {
@@ -394,7 +431,7 @@ function ConfigureExploitMitigations($info) {
 	
 	$got = getter
 
-	if (EqualI $got $base) {
+	if (ieq $got $base) {
 		return $null
 	}
 
@@ -431,11 +468,15 @@ function ConfigureExploitMitigations($info) {
 	if ($D.Length -ne 0) { 
 		$parameters["Disable"] = $D
 	}
-	Set-ProcessMitigation -System @parameters *> $null
+	try {
+		Set-ProcessMitigation -System -WarningAction "Stop" @parameters *> $null
+	} catch
+		[System.Management.Automation.ParentContainsErrorRecordException]
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return EqualI $got $base
+	return ieq $got $base
 }
 
 function ConfigureBootOption($option, $value) {
@@ -444,36 +485,45 @@ function ConfigureBootOption($option, $value) {
 
 	function getter {
 		$pattern = '^' + [regex]::escape($option) + '\s+(\w+)$'
-		$info = (& $bcdedit /enum "{current}") | Select-String -Pattern $pattern
+		$out = & $bcdedit /enum "{current}"
+		if (! $?) {
+			return $ERRGET
+		}	
+		$info = $out | Select-String -Pattern $pattern
 		if (($null -ne $info) -and ($info.Matches.Length -eq 1)) {
 			return $info.Matches[0].Groups[1].Value
 		}
-		return $null
+		return $VOID
 	}
 	
 	$got = getter
-	
-	if ($got -ieq $value) {
+
+	if (eq $got $ERRGET) {
+		return $ERRGET
+	} elseif (ieq $got $value) {
 		return $null
 	}
 
 	& $bcdedit /set "{current}" $option $value > $null
+	if (! $?) {
+		return $ERRSET
+	}
 
 	$got = getter
 	
-	return $got -ieq $value
+	return ieq $got $value
 }
 
 function ConfigurePowerShellPolicy($value) {
 	
 	function getter {
-		$got = Get-ExecutionPolicy -Scope "LocalMachine"
+		$got = [string](Get-ExecutionPolicy -Scope "LocalMachine")
 		return $got
 	}
 	
 	$got = getter
 
-	if ($got -ieq $value) {
+	if (ieq $got $value) {
 		return $null
 	}
 
@@ -481,11 +531,11 @@ function ConfigurePowerShellPolicy($value) {
 		Set-ExecutionPolicy -ExecutionPolicy $value -Scope "LocalMachine" -Force
 	} catch 
 		[System.UnauthorizedAccessException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return $got -ieq $value
+	return ieq $got $value
 }
 
 function ConfigureService($name, $startup, $state) {
@@ -494,18 +544,18 @@ function ConfigureService($name, $startup, $state) {
 	
 	function getter {
 		$service = Get-Service -Name $name
-		$got = @{ "startup" = $service.StartType }
+		$got = @{ "startup" = [string]$service.StartType }
 		if ($null -eq $state) {
 			$got["state"] = $null
 		} else {
-			$got["state"] = $service.Status
+			$got["state"] = [string]$service.Status
 		}
 		return $got
 	}
 	
 	$got = getter
 
-	if (EqualI $got $conf) {
+	if (ieq $got $conf) {
 		return $null
 	}
 
@@ -517,11 +567,11 @@ function ConfigureService($name, $startup, $state) {
 		}
 	} catch 
 		[Microsoft.PowerShell.Commands.ServiceCommandException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return EqualI $got $conf
+	return ieq $got $conf
 }
 
 function ConfigureWDAC() {
@@ -534,23 +584,28 @@ function ConfigureWDAC() {
 		$null = ConvertFrom-CIPolicy -XmlFilePath $base -BinaryFilePath $temp
 	} catch
 		[System.Management.Automation.CommandNotFoundException]
-		{ return $VOID }
+		{ return $ERRGET }
 	
 	$policy = GetBinaryContent -path $temp
 
 	function getter {
 		try {
 			$actual = GetBinaryContent -path $wdac
-		} catch 
-			[System.Management.Automation.ItemNotFoundException],
+		} 
+		catch 
+			[System.Management.Automation.ItemNotFoundException]
+			{ $actual = $VOID } 
+		catch
 			[System.UnauthorizedAccessException]
-			{ $actual = $null }
+			{ $actual = $ERRGET }
 		return $actual
 	}
 	
 	$got = getter
 
-	if (Equal $got $policy) {
+	if (eq $got $ERRGET) {
+		return $ERRGET
+	} elseif (eq $got $policy) {
 		return $null
 	}
 
@@ -558,11 +613,11 @@ function ConfigureWDAC() {
 		Copy-Item -Path $temp -Destination $wdac -Force
 	} catch 
 		[System.UnauthorizedAccessException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return Equal $got $policy
+	return eq $got $policy
 }
 
 function ConfigureOptionalFeature($feature, $value) {
@@ -570,15 +625,17 @@ function ConfigureOptionalFeature($feature, $value) {
 	function getter {
 		try {
 			$obj = Get-WindowsOptionalFeature -Online -FeatureName $feature
-			return $obj.State -ine "Disabled"
+			return [string]$obj.State -ine "Disabled"
 		} catch
 			[System.Runtime.InteropServices.COMException]
-			{ return $null }
+			{ return $ERRGET }
 	}
 	
 	$got = getter
 
-	if ($got -eq $value) {
+	if (eq $got $ERRGET) {
+		return $ERRGET
+	} elseif (eq $got $value) {
 		return $null
 	}
 
@@ -590,11 +647,11 @@ function ConfigureOptionalFeature($feature, $value) {
 		}
 	} catch 
 		[System.Runtime.InteropServices.COMException]
-		{ }
+		{ return $ERRSET }
 
 	$got = getter
 	
-	return $got -eq $value
+	return eq $got $value
 }
 
 function ConfigureAll {
@@ -780,21 +837,21 @@ function ConfigureAll {
 	}
 
 	$AMStatus = Get-MpComputerStatus
-
+	
 	$PCReports = (
-		((PCCheck (($DGStatus.CodeIntegrityPolicyEnforcementStatus -eq 2) -and ($DGStatus.UsermodeCodeIntegrityPolicyEnforcementStatus -eq 2))), "WDAC is running in Enforced mode"),
-		((PCCheck (($Host.Runspace.LanguageMode -ieq "ConstrainedLanguage") -and ($ExecutionContext.SessionState.LanguageMode -ieq "ConstrainedLanguage"))), "This script is running in Constrained Language mode"),
-		((PCCheck ($AMStatus.AMServiceEnabled -eq $true)), "Antimalware Engine is enabled"),
-		((PCCheck ($AMStatus.AntispywareEnabled -eq $true)), "Antispyware protection is enabled"),
-		((PCCheck ($AMStatus.AntivirusEnabled -eq $true)), "Antivirus protection is enabled"),
-		((PCCheck ($AMStatus.BehaviorMonitorEnabled -eq $true)), "Behavior monitoring is enabled"),
-		((PCCheck ($AMStatus.IoavProtectionEnabled -eq $true)), "All downloaded files and attachments are scanned"),
-		((PCCheck ($AMStatus.NISEnabled -eq $true)), "NRI Engine is enabled"),
-		((PCCheck ($AMStatus.OnAccessProtectionEnabled -eq $true)), "File and program activity monitoring is enabled"),
-		((PCCheck ($AMStatus.RealTimeProtectionEnabled -eq $true)), "Real-time protection is enabled"),
-		((PCCheck ($AMStatus.RealTimeScanDirection -eq 0)), "Both incoming and outgoing files are scanned"),
-		((PCCheck ($AMStatus.AMRunningMode -ieq "Normal")), "Antimalware running mode is Normal"),
-		((PCCheck ($AMStatus.IsTamperProtected -eq $true)), "Windows Defender tamper protection is enabled")
+		((PCCheck ((eq $DGStatus.CodeIntegrityPolicyEnforcementStatus 2) -and (eq $DGStatus.UsermodeCodeIntegrityPolicyEnforcementStatus 2))), "WDAC is running in Enforced mode"),
+		((PCCheck (([string]$Host.Runspace.LanguageMode -ieq "ConstrainedLanguage") -and ([string]$ExecutionContext.SessionState.LanguageMode -ieq "ConstrainedLanguage"))), "This script is running in Constrained Language mode"),
+		((PCCheck (eq $AMStatus.AMServiceEnabled $true)), "Antimalware Engine is enabled"),
+		((PCCheck (eq $AMStatus.AntispywareEnabled $true)), "Antispyware protection is enabled"),
+		((PCCheck (eq $AMStatus.AntivirusEnabled $true)), "Antivirus protection is enabled"),
+		((PCCheck (eq $AMStatus.BehaviorMonitorEnabled $true)), "Behavior monitoring is enabled"),
+		((PCCheck (eq $AMStatus.IoavProtectionEnabled $true)), "All downloaded files and attachments are scanned"),
+		((PCCheck (eq $AMStatus.NISEnabled $true)), "NRI Engine is enabled"),
+		((PCCheck (eq $AMStatus.OnAccessProtectionEnabled $true)), "File and program activity monitoring is enabled"),
+		((PCCheck (eq $AMStatus.RealTimeProtectionEnabled $true)), "Real-time protection is enabled"),
+		((PCCheck (eq $AMStatus.RealTimeScanDirection 0)), "Both incoming and outgoing files are scanned"),
+		((PCCheck ([string]$AMStatus.AMRunningMode -ieq "Normal")), "Antimalware running mode is Normal"),
+		((PCCheck (eq $AMStatus.IsTamperProtected $true)), "Windows Defender tamper protection is enabled")
 	)
 
 	if (HasSecureBoot) {
@@ -802,7 +859,7 @@ function ConfigureAll {
 	}
 
 	if (HasHypervisor) {
-		$PCReports += (, ((PCCheck ($DGStatus.VirtualizationBasedSecurityStatus -eq 2)), "Virtualization Based Security is active"))
+		$PCReports += (, ((PCCheck (eq $DGStatus.VirtualizationBasedSecurityStatus 2)), "Virtualization Based Security is active"))
 	}
 
 	if (HasHVCI) {
