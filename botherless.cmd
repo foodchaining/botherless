@@ -24,6 +24,7 @@ $ERRGET = New-Object -TypeName "PSObject"
 $ERRSET = New-Object -TypeName "PSObject"
 
 $BLAllFlags = @{
+	"-Tackle" = ""
 	"-NoIntroWarning" = ""
 	"-AllowRestrictedUserMode" = ""
 	"-ForceRelocateImages" = ""
@@ -36,6 +37,10 @@ $BLFlags = $null
 $DGStatus = $null
 $AMStatus = $null
 $PCReports = $null
+
+function ArgTackle {
+	return $BLFlags -icontains "-Tackle"
+}
 
 function ArgNoIntroWarning {
 	return $BLFlags -icontains "-NoIntroWarning"
@@ -315,6 +320,8 @@ function ConfigureRegistry($item, $property, $type, $value) {
 
 	if ((ceq $got $value) -and (EqualKinds $got $value)) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -347,6 +354,8 @@ function ConfigureMpPreference($preference, $value) {
 
 	if (ceq $got $value) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -381,6 +390,8 @@ function ConfigureASRRules($rules) {
 
 	if (eq $got $rules) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -433,6 +444,8 @@ function ConfigureExploitMitigations($info) {
 
 	if (ieq $got $base) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	$E = @()
@@ -502,6 +515,8 @@ function ConfigureBootOption($option, $value) {
 		return $ERRGET
 	} elseif (ieq $got $value) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	& $bcdedit /set "{current}" $option $value > $null
@@ -525,6 +540,8 @@ function ConfigurePowerShellPolicy($value) {
 
 	if (ieq $got $value) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -557,6 +574,8 @@ function ConfigureService($name, $startup, $state) {
 
 	if (ieq $got $conf) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -607,6 +626,8 @@ function ConfigureWDAC() {
 		return $ERRGET
 	} elseif (eq $got $policy) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -637,6 +658,8 @@ function ConfigureOptionalFeature($feature, $value) {
 		return $ERRGET
 	} elseif (eq $got $value) {
 		return $null
+	} elseif (!(ArgTackle)) {
+		return $false
 	}
 
 	try {
@@ -672,7 +695,7 @@ function ConfigureAll {
 		exit 1
 	}
 
-	if (!(ArgNoIntroWarning)) {
+	if ((ArgTackle) -and !(ArgNoIntroWarning)) {
 		ConfirmWarning
 	}
 
