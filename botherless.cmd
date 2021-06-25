@@ -90,6 +90,21 @@ function GetDesiredBlockingLevel {
 	}
 }
 
+function ArrayToSet($list) {
+	$set = @{}
+	foreach ($e in $list) 
+		{ $set[$e] = $true }
+	return $set
+}
+
+function CommaStrToSet($str) {
+	return ArrayToSet @($str -split "," | % {$_.Trim()} | ? {$_})
+}
+
+function SetToCommaStr($set) {
+	return @($set.Keys | % {$_.Trim()} | ? {$_}) -join ","
+}
+
 function DeepEqual($a0, $a1, [scriptblock]$equality) {
 
 	if (($null -eq $a0) -and ($null -eq $a1)) {
@@ -247,6 +262,10 @@ function Report($report, $info) {
 }
 
 function ReportMulti($info, $reports) {
+	if (!($reports -is [array])) {
+		Report $reports $info
+		return
+	}
 	$root = 0
 	foreach ($report in $reports) {
 		$code = ReportToInt $report[0]
@@ -300,6 +319,50 @@ function GetBinaryContent($path) {
 	return Get-Content -Path $path -Raw -Encoding "Byte"
 }
 
+function ReadIniFile($path) {
+	$lines = Get-Content -Path $path
+	$ini = @{}
+	$section = $null
+	switch -Regex ($lines)
+	{
+		'^\s*(.+?)\s*=(.*)$' 
+		{
+			if ($null -eq $section) 
+				{ return $null }
+			$name, $value = $Matches[1..2]
+			$ini[$section][$name] = $value
+			continue
+		}
+		'^\s*\[(.+)\]\s*$'
+		{
+			$section = $Matches[1]
+			if (!($ini.ContainsKey($section))) 
+				{ $ini[$section] = @{} }
+			continue
+		}
+		'^\s*;.*$' 
+			{ continue }
+		default 
+			{ return $null }
+	}
+	return $ini
+}
+
+function WriteIniFile($ini, $path) {
+	$content = @()
+	foreach ($i in $ini.Keys | sort) {	
+		$content += "[$i]"
+		foreach ($j in $ini[$i].Keys | sort) 
+			{ $content += "$j=$($ini[$i][$j])" }
+	}
+	Set-Content -Path $path -Value $content
+}
+
+function GetDefaultAdministrator {
+	return Get-CIMInstance -Class "Win32_UserAccount" `
+		-Filter "LocalAccount = 'True' AND SID LIKE 'S-1-5-%-500'"
+}
+
 function ConfigureRegistry($item, $property, $type, $value) {
 
 	function getter {
@@ -337,6 +400,97 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	$got = getter
 	
 	return (CEQ $got $value) -and (EqualKinds $got $value)
+}
+
+function ConfigureSecurityPolicy($conf) {
+
+	$desired = @{}
+	foreach ($i in $conf.GetEnumerator()) {
+		$desired[$i.Key] = @{}
+		foreach ($j in $i.Value.GetEnumerator()) 
+			{ $desired[$i.Key][$j.Key] = $j.Value[0] }
+	}
+	
+	$secedit = "$env:windir\System32\SecEdit.exe"
+
+	function getter {
+		$temp = (New-TemporaryFile).FullName
+
+		& $secedit /export /areas SECURITYPOLICY USER_RIGHTS /cfg $temp > $null
+		if (! $?) 
+			{ return $ERRGET }	
+			
+		$complete = ReadIniFile -path $temp
+		if ($null -eq $complete) 
+			{ return $ERRGET }
+
+		$relevant = @{}
+		foreach ($i in $conf.GetEnumerator()) {
+			$relevant[$i.Key] = @{}
+			foreach ($j in $i.Value.GetEnumerator()) {
+				if ($complete.ContainsKey($i.Key) `
+					-and $complete[$i.Key].ContainsKey($j.Key)) 
+				{
+					$relevant[$i.Key][$j.Key] = 
+						& ($j.Value[1]) $complete[$i.Key][$j.Key]
+				} else { 
+					$relevant[$i.Key][$j.Key] = & ($j.Value[1]) "" 
+				}
+			}
+		}
+		return $relevant
+	}
+	
+	function report($got, $report) {
+		$reports = @()
+		foreach ($i in $conf.GetEnumerator()) {
+			foreach ($j in $i.Value.GetEnumerator()) {
+				if ($got.ContainsKey($i.Key) `
+					-and $got[$i.Key].ContainsKey($j.Key) `
+					-and (CEQ $j.Value[0] $got[$i.Key][$j.Key])) 
+				{ 
+					$reports += @(, @($null, $j.Value[3], $j.Value[4])) 
+				} else { 
+					$reports += @(, @($report, $j.Value[3], $j.Value[4])) 
+				}
+			}
+		}
+		return $reports | sort @{e = {$_[2]}}
+	}
+
+	$got = getter
+
+	if (EQ $got $ERRGET) 
+		{ return $ERRGET } 
+	elseif (CEQ $got $desired) 
+		{ return $null } 
+	elseif (!(ArgTackle)) 
+		{ return report $got $false }
+
+	$ini = @{}
+	foreach ($i in $conf.GetEnumerator()) {
+		$ini[$i.Key] = @{}
+		foreach ($j in $i.Value.GetEnumerator()) 
+			{ $ini[$i.Key][$j.Key] = & ($j.Value[2]) $j.Value[0] }
+	}
+	$ini["Unicode"] = @{"Unicode" = "yes"}
+	$ini["Version"] = @{"Signature" = "`"`$CHICAGO`$`""; "Revision" = "1"}
+	$tempIni = (New-TemporaryFile).FullName
+	$tempSdb = (New-TemporaryFile).FullName + "." + 
+		(Get-Random -Minimum 100 -Maximum 1000)
+	WriteIniFile -ini $ini -path $tempIni
+
+	& $secedit /configure /areas SECURITYPOLICY USER_RIGHTS `
+		/cfg $tempIni /db $tempSdb /quiet > $null
+	if (! $?) 
+		{ return report $got $ERRSET }
+
+	$updated = getter
+
+	if (CEQ $updated $desired) 
+		{ return report $got $true } 
+	else 
+		{ return report $updated $false }
 }
 
 function ConfigureMpPreference($preference, $value) {
@@ -683,7 +837,7 @@ function ConfigureOptionalFeature($feature, $value) {
 
 function ConfigureAll {
 
-	$BLFlags = ($env:BOTHERLESS_ARGS -split " ").Trim().Where({$_})
+	$BLFlags = @($env:BOTHERLESS_ARGS -split " " | % {$_.Trim()} | ? {$_})
 
 	foreach ($flag in $BLFlags) {
 		if (!$BLAllFlags.ContainsKey($flag)) {
@@ -792,6 +946,61 @@ function ConfigureAll {
 		((ConfigureRegistry -item "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" -property "ShellSmartScreenLevel" -type String -value "Warn"), "Warn the user that the app appears suspicious"),
 		((ConfigureRegistry -item "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" -property "SmartScreenEnabled" -type String -value "Prompt"), "Warn before running an unrecognized app")
 	)
+
+	$O = 0
+	ReportMulti "Refine Local Security Policy" (ConfigureSecurityPolicy @{
+		"Privilege Rights" = @{
+			"SeDebugPrivilege" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Disable the possibility to debug arbitrary processes"), ++$O)
+			"SeLockMemoryPrivilege" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Disallow any account to lock pages in memory"), ++$O)
+			"SeTcbPrivilege" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Prohibit accounts from acting as part of the operating " +
+				"system"), ++$O)
+			"SeEnableDelegationPrivilege" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Disallow computer and user accounts to be trusted for " + 
+				"delegation"), ++$O)
+			"SeCreateTokenPrivilege" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Prohibit accounts from creating a token"), ++$O)
+			"SeImpersonatePrivilege" = @((ArrayToSet @(
+				"*S-1-5-19", "*S-1-5-20", "*S-1-5-32-544", "*S-1-5-6"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Allow only appropriate accounts to impersonate a client " +
+				"after authentication"), ++$O)
+			"SeSecurityPrivilege" = @((ArrayToSet @(
+				"*S-1-5-32-544"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Allow only Administrators to manage auditing and " +
+				"security log"), ++$O)
+			"SeDenyNetworkLogonRight" = @((ArrayToSet @(
+				"*S-1-5-7", (GetDefaultAdministrator).Name, "*S-1-5-32-546"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Deny inappropriate accounts to access this computer " +
+				"from the network"), ++$O)
+			"SeNetworkLogonRight" = @((ArrayToSet @(
+				"*S-1-5-32-544", "*S-1-5-32-545"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Allow only Users and Administrators to access this " +
+				"computer from the network"), ++$O)
+			"SeDenyRemoteInteractiveLogonRight" = @((ArrayToSet @(
+				"*S-1-5-32-546"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Deny Guests to log on through Remote Desktop Services"), ++$O)
+			"SeRemoteInteractiveLogonRight" = @((ArrayToSet @(
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Allow no one to log on through Remote Desktop Services"), 
+				++$O)
+			"SeDenyInteractiveLogonRight" = @((ArrayToSet @(
+				"*S-1-5-32-546"
+				)), ${function:CommaStrToSet}, ${function:SetToCommaStr}, 
+				("Deny Guests to log on locally"), ++$O)
+		}
+	})
 
 	ReportMulti "Block remote access" (
 		((ConfigureRegistry -item "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" -property "fAllowUnsolicited" -type DWord -value 0), "Prevent unsolicited remote assistance offers"),
