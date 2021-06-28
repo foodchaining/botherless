@@ -23,20 +23,9 @@ $VOID = New-Object -TypeName "PSObject"
 $ERRGET = New-Object -TypeName "PSObject"
 $ERRSET = New-Object -TypeName "PSObject"
 
-$BLAllFlags = @{
-	"-Tackle" = ""
-	"-NoIntroWarning" = ""
-	"-AllowRestrictedUserMode" = ""
-	"-ForceRelocateImages" = ""
-	"-NoAutoRebootWithLoggedOnUsers" = ""
-	"-AuditPrevalenceAgeOrTrustedListCriterion" = ""
-	"-HighPlusBlockingLevel" = ""
-}
-
 $BLFlags = $null
 $DGStatus = $null
 $AMStatus = $null
-$PCReports = $null
 
 function ArgTackle {
 	return $BLFlags -icontains "-Tackle"
@@ -115,6 +104,8 @@ function DeepEqual($a0, $a1, [scriptblock]$equality) {
 		{ return $false }
 
 	if (($a0 -is [array]) -and ($a1 -is [array])) {
+		if ($a0.Equals($a1))
+			{ return $true }
 		if ($a0.Length -ne $a1.Length)
 			{ return $false }
 		for ($i = 0; $i -lt $a0.Length; ++$i) {
@@ -127,6 +118,8 @@ function DeepEqual($a0, $a1, [scriptblock]$equality) {
 		{ return $false }
 
 	if (($a0 -is [hashtable]) -and ($a1 -is [hashtable])) {
+		if ($a0.Equals($a1))
+			{ return $true }
 		if ($a0.Count -ne $a1.Count)
 			{ return $false }
 		foreach ($it in $a0.GetEnumerator()) {
@@ -796,18 +789,28 @@ function ConfigureOptionalFeature($feature, $value) {
 
 function ConfigureAll {
 
-	$BLFlags = @($env:BOTHERLESS_ARGS -split " " | % {$_.Trim()} | ? {$_})
+	$allFlags = @{
+		"-Tackle" = ""
+		"-NoIntroWarning" = ""
+		"-AllowRestrictedUserMode" = ""
+		"-ForceRelocateImages" = ""
+		"-NoAutoRebootWithLoggedOnUsers" = ""
+		"-AuditPrevalenceAgeOrTrustedListCriterion" = ""
+		"-HighPlusBlockingLevel" = ""
+	}
+
+	$local:BLFlags = @($env:BOTHERLESS_ARGS -split " " | % {$_.Trim()} | ? {$_})
 
 	foreach ($flag in $BLFlags) {
-		if (!$BLAllFlags.ContainsKey($flag)) {
+		if (!$allFlags.ContainsKey($flag)) {
 			Write-Host "Bad parameter $flag"
 			exit 1
 		}
 	}
 
-	$OSBuild = [int](Get-WmiObject Win32_OperatingSystem).BuildNumber
+	$osBuild = [int](Get-CimInstance "Win32_OperatingSystem").BuildNumber
 
-	if ($OSBuild -lt 19041) {
+	if ($osBuild -lt 19041) {
 		Write-Host "At least 20H1 version of Windows is required"
 		exit 1
 	}
@@ -816,7 +819,7 @@ function ConfigureAll {
 		ConfirmWarning
 	}
 
-	$DGStatus = Get-CimInstance -ClassName "Win32_DeviceGuard" `
+	$local:DGStatus = Get-CimInstance -ClassName "Win32_DeviceGuard" `
 		-Namespace "root\Microsoft\Windows\DeviceGuard"
 
 	Report (ConfigureWDAC) "Configure Windows Defender Application Control"
@@ -1279,9 +1282,9 @@ function ConfigureAll {
 		)
 	}
 
-	$AMStatus = Get-MpComputerStatus
+	$local:AMStatus = Get-MpComputerStatus
 
-	$PCReports = @(
+	$reports = @(
 		@((PCCheck (
 			(EQ $DGStatus.CodeIntegrityPolicyEnforcementStatus 2) -and `
 			(EQ $DGStatus.UsermodeCodeIntegrityPolicyEnforcementStatus 2))),
@@ -1316,23 +1319,23 @@ function ConfigureAll {
 	)
 
 	if (HasSecureBoot) {
-		$PCReports += @(, @((PCCheck (ConfirmSecureBoot)),
+		$reports += @(, @((PCCheck (ConfirmSecureBoot)),
 			"Secure Boot is active"))
 	}
 
 	if (HasHypervisor) {
-		$PCReports += @(, @((PCCheck `
+		$reports += @(, @((PCCheck `
 			(EQ $DGStatus.VirtualizationBasedSecurityStatus 2)),
 			"Virtualization Based Security is active"))
 	}
 
 	if (HasHVCI) {
-		$PCReports += @(, @((PCCheck `
+		$reports += @(, @((PCCheck `
 			($DGStatus.SecurityServicesRunning -contains 2)),
 			"Hypervisor-protected code integrity is running"))
 	}
 
-	ReportMulti "Perform post-configuration checks" $PCReports
+	ReportMulti "Perform post-configuration checks" $reports
 }
 
 ConfigureAll
