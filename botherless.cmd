@@ -27,6 +27,10 @@ $BLFlags = $null
 $DGStatus = $null
 $AMStatus = $null
 
+function ArgCreateCheckpoint {
+	return $BLFlags -icontains "-CreateCheckpoint"
+}
+
 function ArgTackle {
 	return $BLFlags -icontains "-Tackle"
 }
@@ -182,7 +186,8 @@ function ConfirmWarning {
 			"This script can enable certain Windows built-in boot-critical " +
 			"security options (WDAC, VBS, HVCI, ELAM, DEP, DSE, etc) which " +
 			"in rare cases may render the system unbootable. " +
-			"Proceed with caution!")
+			"Proceed only if a System Restore Point was recently created! " +
+			"(See '-CreateCheckpoint' switch parameter.)")
 	} catch
 		[System.Management.Automation.ParentContainsErrorRecordException]
 		{ exit 1 }
@@ -327,7 +332,7 @@ function WriteIniFile($ini, $path) {
 }
 
 function GetDefaultAdministrator {
-	return Get-CIMInstance -Class "Win32_UserAccount" `
+	return Get-CimInstance -ClassName "Win32_UserAccount" `
 		-Filter "LocalAccount = 'True' AND SID LIKE 'S-1-5-%-500'"
 }
 
@@ -790,6 +795,7 @@ function ConfigureOptionalFeature($feature, $value) {
 function ConfigureAll {
 
 	$allFlags = @{
+		"-CreateCheckpoint" = ""
 		"-Tackle" = ""
 		"-NoIntroWarning" = ""
 		"-AllowRestrictedUserMode" = ""
@@ -808,16 +814,39 @@ function ConfigureAll {
 		}
 	}
 
-	$osBuild = [int](Get-CimInstance "Win32_OperatingSystem").BuildNumber
+	$osInfo = Get-CimInstance -ClassName "Win32_OperatingSystem"
 
-	if ($osBuild -lt 19041) {
-		Write-Host "At least 20H1 version of Windows is required"
+	if (([int]$osInfo.BuildNumber -lt 19041) -or ([intptr]::Size -lt 8)) {
+		Write-Host "At least 20H1 version of 64-bit Windows is required"
 		exit 1
 	}
 
-	if ((ArgTackle) -and !(ArgNoIntroWarning)) {
-		ConfirmWarning
+	if (ArgCreateCheckpoint) {
+		if ($BLFlags.Length -ne 1) {
+			Write-Host "Bad parameters"
+			exit 1
+		}
+		try {
+			Enable-ComputerRestore -Drive $osInfo.SystemDrive
+			Checkpoint-Computer -Description "Botherless Checkpoint" `
+				-RestorePointType "MODIFY_SETTINGS" -WarningAction "Stop"
+			@((Get-ComputerRestorePoint))[-1]
+			exit 0
+		}
+		catch
+			[System.Management.ManagementException]
+		{
+			$msg = ([string]$_).Trim()
+			Write-Warning "A System Restore Point was not created. ($msg)"
+		}
+		catch
+			[System.Management.Automation.ParentContainsErrorRecordException]
+			{ }
+		exit 1
 	}
+
+	if ((ArgTackle) -and !(ArgNoIntroWarning))
+		{ ConfirmWarning }
 
 	$local:DGStatus = Get-CimInstance -ClassName "Win32_DeviceGuard" `
 		-Namespace "root\Microsoft\Windows\DeviceGuard"
