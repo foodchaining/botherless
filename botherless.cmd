@@ -292,6 +292,10 @@ function GetBinaryContent($path) {
 	return Get-Content -Path $path -Raw -Encoding "Byte"
 }
 
+function SetBinaryContent($path, $value) {
+	Set-Content -Path $path -Force -Value $value -Encoding "Byte"
+}
+
 function ReadIniFile($path) {
 	$lines = Get-Content -Path $path
 	$ini = @{}
@@ -329,6 +333,38 @@ function WriteIniFile($ini, $path) {
 			{ $content += "$j=$($ini[$i][$j])" }
 	}
 	Set-Content -Path $path -Value $content
+}
+
+function GenerateBaseWDACPolicy {
+	$base = "$env:windir\schemas\CodeIntegrity\ExamplePolicies\AllowAll.xml"
+	$temp = (New-TemporaryFile).FullName
+	$null = ConvertFrom-CIPolicy -XmlFilePath $base -BinaryFilePath $temp
+	return GetBinaryContent -path $temp
+}
+
+function GetBaseWDACPolicy {
+	# This is the result of 'GenerateBaseWDACPolicy' function calling
+	# (on Windows 10 Pro, Build 19043.1052)
+	[byte[]]@(7,0,0,0,14,55,68,162,201,68,6,76,181,81,246,1,110,86,48,118,228,
+	247,7,46,76,25,32,77,183,201,111,68,166,197,162,52,4,0,136,144,0,0,0,0,2,0,
+	0,0,0,0,0,0,2,0,0,0,0,0,1,0,0,0,1,0,64,0,0,0,1,0,0,0,2,0,0,0,42,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,2,0,0,0,42,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,131,0,0,0,0,0,0,0,12,128,0,0,0,0,0,0,0,0,0,0,1,0,0,
+	0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,12,0,0,0,0,0,0,0,
+	12,128,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,20,0,0,0,80,0,111,0,108,0,105,0,99,0,121,0,
+	73,0,110,0,102,0,111,0,0,0,0,0,22,0,0,0,73,0,110,0,102,0,111,0,114,0,109,0,
+	97,0,116,0,105,0,111,0,110,0,0,0,0,0,0,0,4,0,0,0,73,0,100,0,0,0,0,0,3,0,0,0,
+	12,0,0,0,48,0,52,0,49,0,52,0,49,0,55,0,0,0,0,0,20,0,0,0,80,0,111,0,108,0,
+	105,0,99,0,121,0,73,0,110,0,102,0,111,0,0,0,0,0,22,0,0,0,73,0,110,0,102,0,
+	111,0,114,0,109,0,97,0,116,0,105,0,111,0,110,0,0,0,0,0,0,0,8,0,0,0,78,0,97,
+	0,109,0,101,0,0,0,0,0,3,0,0,0,16,0,0,0,65,0,108,0,108,0,111,0,119,0,65,0,
+	108,0,108,0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,14,55,68,162,201,68,6,76,181,81,246,1,110,
+	86,48,118,14,55,68,162,201,68,6,76,181,81,246,1,110,86,48,118,0,0,0,0,7,0,0,
+	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,0,0,0)
 }
 
 function GetDefaultAdministrator {
@@ -705,28 +741,25 @@ function ConfigureService($name, $startup, $state) {
 function ConfigureWDAC() {
 
 	$wdac = "$env:windir\System32\CodeIntegrity\SIPolicy.p7b"
-	$base = "$env:windir\schemas\CodeIntegrity\ExamplePolicies\AllowAll.xml"
-	$temp = (New-TemporaryFile).FullName
-
-	try {
-		$null = ConvertFrom-CIPolicy -XmlFilePath $base -BinaryFilePath $temp
-	} catch
-		[System.Management.Automation.CommandNotFoundException]
-		{ return $ERRGET }
-
-	$policy = GetBinaryContent -path $temp
+	$multi = "$env:windir\System32\CodeIntegrity\CiPolicies\Active"
+	$policy = GetBaseWDACPolicy
 
 	function getter {
 		try {
-			$actual = GetBinaryContent -path $wdac
-		}
-		catch
-			[System.Management.Automation.ItemNotFoundException]
-			{ $actual = $VOID }
-		catch
+			try {
+				if (@(Get-ChildItem -Path $multi).Count -ne 0)
+					{ return $VOID }
+			} catch
+				[System.Management.Automation.ItemNotFoundException]
+				{ }
+			try {
+				return GetBinaryContent -path $wdac
+			} catch
+				[System.Management.Automation.ItemNotFoundException]
+				{ return $VOID }
+		} catch
 			[System.UnauthorizedAccessException]
-			{ $actual = $ERRGET }
-		return $actual
+			{ return $ERRGET }
 	}
 
 	$got = getter
@@ -739,7 +772,12 @@ function ConfigureWDAC() {
 		{ return $false }
 
 	try {
-		Copy-Item -Path $temp -Destination $wdac -Force
+		try {
+			Remove-Item -Path "$multi\*" -Force -Recurse
+		} catch
+			[System.Management.Automation.ItemNotFoundException]
+			{ }
+		SetBinaryContent -path $wdac -value $policy
 	} catch
 		[System.UnauthorizedAccessException]
 		{ return $ERRSET }
