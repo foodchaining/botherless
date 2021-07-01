@@ -23,9 +23,9 @@ $VOID = New-Object -TypeName "PSObject"
 $ERRGET = New-Object -TypeName "PSObject"
 $ERRSET = New-Object -TypeName "PSObject"
 
-$BLFlags = $null
-$DGStatus = $null
-$AMStatus = $null
+$script:BLFlags = $null
+$script:DGStatus = $null
+$script:AMStatus = $null
 
 function ArgCreateCheckpoint {
 	return $BLFlags -icontains "-CreateCheckpoint"
@@ -288,6 +288,16 @@ function ConfirmSecureBoot {
 	return $VOID
 }
 
+function ConfirmConstrainedMode {
+	$langmode = PowerShell -Command ("& { @( " +
+		"`$Host.Runspace.LanguageMode, " +
+		"`$ExecutionContext.SessionState.LanguageMode " +
+	") }")
+	return ($langmode -is [array]) -and ($langmode.Length -eq 2) `
+		-and ("ConstrainedLanguage" -ieq $langmode[0]) `
+		-and ("ConstrainedLanguage" -ieq $langmode[1])
+}
+
 function GetBinaryContent($path) {
 	return Get-Content -Path $path -Raw -Encoding "Byte"
 }
@@ -365,6 +375,11 @@ function GetBaseWDACPolicy {
 	0,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,14,55,68,162,201,68,6,76,181,81,246,1,110,
 	86,48,118,14,55,68,162,201,68,6,76,181,81,246,1,110,86,48,118,0,0,0,0,7,0,0,
 	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,8,0,0,0)
+}
+
+function FetchDGStatus {
+	$script:DGStatus = Get-CimInstance -ClassName "Win32_DeviceGuard" `
+		-Namespace "root\Microsoft\Windows\DeviceGuard"
 }
 
 function GetDefaultAdministrator {
@@ -743,48 +758,69 @@ function ConfigureWDAC() {
 	$wdac = "$env:windir\System32\CodeIntegrity\SIPolicy.p7b"
 	$multi = "$env:windir\System32\CodeIntegrity\CiPolicies\Active"
 	$policy = GetBaseWDACPolicy
+	$desired = @{ "policy" = $policy; "running" = $true }
 
 	function getter {
 		try {
+			$running =
+				(EQ $DGStatus.CodeIntegrityPolicyEnforcementStatus 2) -and `
+				(EQ $DGStatus.UsermodeCodeIntegrityPolicyEnforcementStatus 2)
 			try {
 				if (@(Get-ChildItem -Path $multi).Count -ne 0)
-					{ return $VOID }
+					{ return @{ "policy" = $VOID; "running" = $running } }
 			} catch
 				[System.Management.Automation.ItemNotFoundException]
 				{ }
 			try {
-				return GetBinaryContent -path $wdac
+				return @{ "policy" = (GetBinaryContent -path $wdac)
+					"running" = $running }
 			} catch
 				[System.Management.Automation.ItemNotFoundException]
-				{ return $VOID }
+				{ return @{ "policy" = $VOID; "running" = $running } }
 		} catch
 			[System.UnauthorizedAccessException]
 			{ return $ERRGET }
+	}
+
+	function report($got, $report) {
+		$rWrite = if (EQ $got["policy"] $policy) { $null } else { $report }
+		$rStart = if (NE $got["running"] $false) { $null } else { $report }
+		return @(
+			@($rWrite, "Install WDAC policy binary file"),
+			@($rStart, "Start WDAC or update its policy without reboot")
+		)
 	}
 
 	$got = getter
 
 	if (EQ $got $ERRGET)
 		{ return $ERRGET }
-	elseif (EQ $got $policy)
+	elseif (EQ $got $desired)
 		{ return $null }
 	elseif (!(ArgTackle))
-		{ return $false }
+		{ return report $got $false }
 
 	try {
-		try {
-			Remove-Item -Path "$multi\*" -Force -Recurse
-		} catch
-			[System.Management.Automation.ItemNotFoundException]
-			{ }
+		Remove-Item -Path "$multi\*" -Force -Recurse
 		SetBinaryContent -path $wdac -value $policy
+		$rval = Invoke-CimMethod -Namespace "root\Microsoft\Windows\CI" `
+			-ClassName "PS_UpdateAndCompareCIPolicy" -MethodName "Update" `
+			-Arguments @{ "FilePath" = $wdac }
+		if (0 -ne $rval.ReturnValue)
+			{ return report $got $ERRSET }
 	} catch
-		[System.UnauthorizedAccessException]
-		{ return $ERRSET }
+		[System.Management.Automation.ItemNotFoundException],
+		[System.UnauthorizedAccessException],
+		[Microsoft.Management.Infrastructure.CimException]
+		{ return report $got $ERRSET }
 
-	$got = getter
+	FetchDGStatus
+	$updated = getter
 
-	return EQ $got $policy
+	if (EQ $updated $desired)
+		{ return report $got $true }
+	else
+		{ return report $updated $false }
 }
 
 function ConfigureOptionalFeature($feature, $value) {
@@ -886,10 +922,10 @@ function ConfigureAll {
 	if ((ArgTackle) -and !(ArgNoIntroWarning))
 		{ ConfirmWarning }
 
-	$local:DGStatus = Get-CimInstance -ClassName "Win32_DeviceGuard" `
-		-Namespace "root\Microsoft\Windows\DeviceGuard"
+	FetchDGStatus
 
-	Report (ConfigureWDAC) "Configure Windows Defender Application Control"
+	ReportMulti "Configure and run Windows Defender Application Control" `
+		(ConfigureWDAC)
 
 	Report (ConfigureBootOption -option "nx" -value "AlwaysOn") `
 		"Enable DEP for the operating system and all processes"
@@ -1352,15 +1388,8 @@ function ConfigureAll {
 	$local:AMStatus = Get-MpComputerStatus
 
 	$reports = @(
-		@((PCCheck (
-			(EQ $DGStatus.CodeIntegrityPolicyEnforcementStatus 2) -and `
-			(EQ $DGStatus.UsermodeCodeIntegrityPolicyEnforcementStatus 2))),
-			"WDAC is running in Enforced mode"),
-		@((PCCheck (
-			("ConstrainedLanguage" -ieq $Host.Runspace.LanguageMode) -and `
-			("ConstrainedLanguage" -ieq `
-				$ExecutionContext.SessionState.LanguageMode))),
-			"This script is running in Constrained Language mode"),
+		@((PCCheck (ConfirmConstrainedMode)),
+			"PowerShell is configured to run in Constrained Language mode"),
 		@((PCCheck (EQ $AMStatus.AMServiceEnabled $true)),
 			"Antimalware Engine is enabled"),
 		@((PCCheck (EQ $AMStatus.AntispywareEnabled $true)),
