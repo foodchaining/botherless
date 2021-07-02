@@ -175,6 +175,22 @@ function EqualKinds($a0, $a1) {
 	return (GetKind $a0) -eq (GetKind $a1)
 }
 
+function Pick {
+	$index = [int]($args[0])
+	return $args[1 + $index]
+}
+
+function GetElement {
+	$current = $args[0]
+	for ($i = 1; $i -lt $args.Length; ++$i) {
+		if ($null -ne $current)
+			{ $current = $current[$args[$i]] }
+		else
+			{ break }
+	}
+	return $current
+}
+
 function DumpVersion {
 	Write-Host "Botherless Security Script Version" $BLVersion
 }
@@ -210,7 +226,7 @@ function DumpReport($code, $info, $indent = 0) {
 }
 
 function ReportToInt($report) {
-	if (EQ $null $report)
+	if (EQ $VOID $report)
 		{ return 0 }
 	if (EQ $true $report)
 		{ return 1 }
@@ -225,10 +241,21 @@ function ReportToInt($report) {
 
 function PCCheck($report) {
 	if (EQ $true $report)
-		{ return $null }
+		{ return $VOID }
 	if (EQ $false $report)
 		{ return $false }
 	return $ERRGET
+}
+
+function CompoundReport($report, $dv, $gv, $uv, [scriptblock]$eq) {
+	if ($null -eq $uv)
+		{ return Pick (& $eq $dv $gv) $report $VOID }
+	else {
+		if (& $eq $dv $uv)
+			{ return Pick (& $eq $dv $gv) $true $VOID }
+		else
+			{ return $report }
+	}
 }
 
 function Report($report, $info) {
@@ -402,7 +429,7 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	$got = getter
 
 	if ((CEQ $got $value) -and (EqualKinds $got $value))
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -463,17 +490,15 @@ function ConfigureSecurityPolicy($conf) {
 		return $relevant
 	}
 
-	function report($got, $report) {
+	function report($report, $got, $updated) {
 		$reports = @()
 		foreach ($i in $conf.GetEnumerator()) {
 			foreach ($j in $i.Value.GetEnumerator()) {
-				if ($got.ContainsKey($i.Key) `
-					-and $got[$i.Key].ContainsKey($j.Key) `
-					-and (CEQ $j.Value[0] $got[$i.Key][$j.Key]))
-				{
-					$reports += @(, @($null, $j.Value[3], $j.Value[4]))
-				} else
-					{ $reports += @(, @($report, $j.Value[3], $j.Value[4])) }
+				$dv = $j.Value[0]
+				$gv = $got[$i.Key][$j.Key]
+				$uv = GetElement $updated $i.Key $j.Key
+				$cr = CompoundReport $report $dv $gv $uv ${function:CEQ}
+				$reports += @(, @($cr, $j.Value[3], $j.Value[4]))
 			}
 		}
 		return $reports | sort @{e = {$_[2]}}
@@ -484,9 +509,9 @@ function ConfigureSecurityPolicy($conf) {
 	if (EQ $got $ERRGET)
 		{ return $ERRGET }
 	elseif (CEQ $got $desired)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
-		{ return report $got $false }
+		{ return report $false $got $null }
 
 	$ini = @{}
 	foreach ($i in $conf.GetEnumerator()) {
@@ -504,14 +529,9 @@ function ConfigureSecurityPolicy($conf) {
 	& $secedit "/configure" "/areas" "SECURITYPOLICY" "USER_RIGHTS" `
 		"/cfg" $tempIni "/db" $tempSdb "/quiet" > $null
 	if (! $?)
-		{ return report $got $ERRSET }
+		{ return report $ERRSET $got (getter) }
 
-	$updated = getter
-
-	if (CEQ $updated $desired)
-		{ return report $got $true }
-	else
-		{ return report $updated $false }
+	return report $false $got (getter)
 }
 
 function ConfigureMpPreference($preference, $value) {
@@ -524,7 +544,7 @@ function ConfigureMpPreference($preference, $value) {
 	$got = getter
 
 	if (CEQ $got $value)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -558,7 +578,7 @@ function ConfigureASRRules($rules) {
 	$got = getter
 
 	if (EQ $got $rules)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -614,7 +634,7 @@ function ConfigureExploitMitigations($info) {
 	$got = getter
 
 	if (IEQ $got $base)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -680,7 +700,7 @@ function ConfigureBootOption($option, $value) {
 	if (EQ $got $ERRGET)
 		{ return $ERRGET }
 	elseif (IEQ $got $value)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -703,7 +723,7 @@ function ConfigurePowerShellPolicy($value) {
 	$got = getter
 
 	if (IEQ $got $value)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -735,7 +755,7 @@ function ConfigureService($name, $startup, $state) {
 	$got = getter
 
 	if (IEQ $got $conf)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
@@ -782,9 +802,11 @@ function ConfigureWDAC() {
 			{ return $ERRGET }
 	}
 
-	function report($got, $report) {
-		$rWrite = if (EQ $got["policy"] $policy) { $null } else { $report }
-		$rStart = if (NE $got["running"] $false) { $null } else { $report }
+	function report($report, $got, $updated) {
+		$rWrite = CompoundReport $report $policy $got["policy"] `
+			(GetElement $updated "policy") ${function:EQ}
+		$rStart = CompoundReport $report $true $got["running"] `
+			(GetElement $updated "running") ${function:EQ}
 		return @(
 			@($rWrite, "Install WDAC policy binary file"),
 			@($rStart, "Start WDAC or update its policy without reboot")
@@ -796,9 +818,9 @@ function ConfigureWDAC() {
 	if (EQ $got $ERRGET)
 		{ return $ERRGET }
 	elseif (EQ $got $desired)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
-		{ return report $got $false }
+		{ return report $false $got $null }
 
 	try {
 		Remove-Item -Path "$multi\*" -Force -Recurse
@@ -807,20 +829,16 @@ function ConfigureWDAC() {
 			-ClassName "PS_UpdateAndCompareCIPolicy" -MethodName "Update" `
 			-Arguments @{ "FilePath" = $wdac }
 		if (0 -ne $rval.ReturnValue)
-			{ return report $got $ERRSET }
+			{ return report $ERRSET $got (getter) }
 	} catch
 		[System.Management.Automation.ItemNotFoundException],
 		[System.UnauthorizedAccessException],
 		[Microsoft.Management.Infrastructure.CimException]
-		{ return report $got $ERRSET }
+		{ return report $ERRSET $got (getter) }
 
 	FetchDGStatus
-	$updated = getter
 
-	if (EQ $updated $desired)
-		{ return report $got $true }
-	else
-		{ return report $updated $false }
+	return report $false $got (getter)
 }
 
 function ConfigureOptionalFeature($feature, $value) {
@@ -846,7 +864,7 @@ function ConfigureOptionalFeature($feature, $value) {
 	if (EQ $got $ERRGET)
 		{ return $ERRGET }
 	elseif (EQ $got $value)
-		{ return $null }
+		{ return $VOID }
 	elseif (!(ArgTackle))
 		{ return $false }
 
