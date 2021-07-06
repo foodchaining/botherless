@@ -54,6 +54,13 @@ function GetDesiredForceRelocateImages {
 		{ return "OFF" }
 }
 
+function GetDesiredForceRelocateImagesDescription {
+	if (ArgForceRelocateImages)
+		{ return "Mandatory ASLR: force randomization for images" }
+	else
+		{ return "Mandatory ASLR: don't force randomization for images" }
+}
+
 function ArgNoAutoRebootWithLoggedOnUsers {
 	return $BLFlags -icontains "-NoAutoRebootWithLoggedOnUsers"
 }
@@ -622,9 +629,9 @@ function ConfigureASRRules($rules) {
 	return report $false $got (getter)
 }
 
-function ConfigureExploitMitigations($info) {
+function ConfigureExploitMitigations($conf) {
 
-	$base = @{
+	$desired = @{
 		"DEP.Enable" = "ON"
 		"DEP.EmulateAtlThunks" = "OFF"
 		"ASLR.ForceRelocateImages" = GetDesiredForceRelocateImages
@@ -633,10 +640,17 @@ function ConfigureExploitMitigations($info) {
 		"ASLR.HighEntropy" = "ON"
 		"CFG.Enable" = "ON"
 		"CFG.SuppressExports" = "OFF"
-		#"CFG.StrictControlFlowGuard" = "OFF"
+		"CFG.StrictControlFlowGuard" = "OFF"
 		"SEHOP.Enable" = "ON"
 		"SEHOP.TelemetryOnly" = "OFF"
 		"Heap.TerminateOnError" = "ON"
+	}
+
+	foreach ($i in $conf.GetEnumerator()) {
+		if($desired.ContainsKey($i.Key))
+			{ $desired[$i.Key] = $i.Value[0] }
+		else
+			{ throw "ConfigureExploitMitigations: $($i.Key) is unknown" }
 	}
 
 	function getter {
@@ -650,47 +664,58 @@ function ConfigureExploitMitigations($info) {
 			"ASLR.HighEntropy" = [string]$obj.ASLR.HighEntropy
 			"CFG.Enable" = [string]$obj.CFG.Enable
 			"CFG.SuppressExports" = [string]$obj.CFG.SuppressExports
-			#"CFG.StrictControlFlowGuard" =
-			#	[string]$obj.CFG.StrictControlFlowGuard
+			"CFG.StrictControlFlowGuard" =
+				[string]$obj.CFG.StrictControlFlowGuard
 			"SEHOP.Enable" = [string]$obj.SEHOP.Enable
 			"SEHOP.TelemetryOnly" = [string]$obj.SEHOP.TelemetryOnly
 			"Heap.TerminateOnError" = [string]$obj.Heap.TerminateOnError
 		}
 	}
 
+	function report($report, $got, $updated) {
+		$reports = @()
+		foreach ($i in $conf.GetEnumerator()) {
+			if(! $desired.ContainsKey($i.Key))
+				{ continue }
+			$dv = $desired[$i.Key]
+			$gv = $got[$i.Key]
+			$uv = GetElement $updated $i.Key
+			$cr = CompoundReport $report $dv $gv $uv ${function:IEQ}
+			$reports += @(, @($cr, $i.Value[1], $i.Value[2]))
+		}
+		return $reports | sort @{e = {$_[2]}}
+	}
+
 	$got = getter
 
-	if (IEQ $got $base)
+	if (IEQ $got $desired)
 		{ return $VOID }
 	elseif (!(ArgTackle))
-		{ return $false }
+		{ return report $false $got $null }
+
+	$tags = @{
+		"DEP.Enable" = "DEP"
+		"DEP.EmulateAtlThunks" = "EmulateAtlThunks"
+		"ASLR.ForceRelocateImages" = "ForceRelocateImages"
+		"ASLR.RequireInfo" = "RequireInfo"
+		"ASLR.BottomUp" = "BottomUp"
+		"ASLR.HighEntropy" = "HighEntropy"
+		"CFG.Enable" = "CFG"
+		"CFG.SuppressExports" = "SuppressExports"
+		"CFG.StrictControlFlowGuard" = "StrictCFG"
+		"SEHOP.Enable" = "SEHOP"
+		"SEHOP.TelemetryOnly" = "SEHOPTelemetry"
+		"Heap.TerminateOnError" = "TerminateOnError"
+	}
 
 	$E = @()
 	$D = @()
-	if ($base["DEP.Enable"] -ine "OFF")
-		{ $E += "DEP" } else { $D += "DEP" }
-	if ($base["DEP.EmulateAtlThunks"] -ine "OFF")
-		{ $E += "EmulateAtlThunks" } else { $D += "EmulateAtlThunks" }
-	if ($base["ASLR.ForceRelocateImages"] -ine "OFF")
-		{ $E += "ForceRelocateImages" } else { $D += "ForceRelocateImages" }
-	if ($base["ASLR.RequireInfo"] -ine "OFF")
-		{ $E += "RequireInfo" } else { $D += "RequireInfo" }
-	if ($base["ASLR.BottomUp"] -ine "OFF")
-		{ $E += "BottomUp" } else { $D += "BottomUp" }
-	if ($base["ASLR.HighEntropy"] -ine "OFF")
-		{ $E += "HighEntropy" } else { $D += "HighEntropy" }
-	if ($base["CFG.Enable"] -ine "OFF")
-		{ $E += "CFG" } else { $D += "CFG" }
-	if ($base["CFG.SuppressExports"] -ine "OFF")
-		{ $E += "SuppressExports" } else { $D += "SuppressExports" }
-	#if ($base["CFG.StrictControlFlowGuard"] -ine "OFF")
-	#	{ $E += "StrictCFG" } else { $D += "StrictCFG" }
-	if ($base["SEHOP.Enable"] -ine "OFF")
-		{ $E += "SEHOP" } else { $D += "SEHOP" }
-	if ($base["SEHOP.TelemetryOnly"] -ine "OFF")
-		{ $E += "SEHOPTelemetry" } else { $D += "SEHOPTelemetry" }
-	if ($base["Heap.TerminateOnError"] -ine "OFF")
-		{ $E += "TerminateOnError" } else { $D += "TerminateOnError" }
+	foreach ($i in $tags.GetEnumerator()) {
+		if ($desired[$i.Key] -ine "OFF")
+			{ $E += $i.Value }
+		else
+			{ $D += $i.Value }
+	}
 	$parameters = @{ "Force" = "off" }
 	if ($E.Length -ne 0)
 		{ $parameters["Enable"] = $E }
@@ -700,11 +725,9 @@ function ConfigureExploitMitigations($info) {
 		Set-ProcessMitigation -System -WarningAction "Stop" @parameters *> $null
 	} catch
 		[System.Management.Automation.ParentContainsErrorRecordException]
-		{ return $ERRSET }
+		{ return report $ERRSET $got (getter) }
 
-	$got = getter
-
-	return IEQ $got $base
+	return report $false $got (getter)
 }
 
 function ConfigureBootOption($option, $value) {
@@ -1139,7 +1162,34 @@ function ConfigureAll {
 			-value 1), "Enable Windows Defender Network Protection")
 	)
 
-	Report (ConfigureExploitMitigations) "Enable exploit mitigations"
+	$O = 0
+	ReportMulti "Enable exploit mitigations" (ConfigureExploitMitigations `
+			-conf @{
+		"DEP.Enable" = @("ON",
+			"DEP: enable Data Execution Prevention", ++$O)
+		"DEP.EmulateAtlThunks" = @("OFF",
+			"DEP: disable ATL Thunk emulation", ++$O)
+		"ASLR.ForceRelocateImages" = @((GetDesiredForceRelocateImages),
+			(GetDesiredForceRelocateImagesDescription), ++$O)
+		"ASLR.RequireInfo" = @("OFF",
+			"Mandatory ASLR: don't require relocation information", ++$O)
+		"ASLR.BottomUp" = @("ON",
+			"Bottom-up ASLR: randomize memory allocations", ++$O)
+		"ASLR.HighEntropy" = @("ON",
+			"Bottom-up ASLR: use high entropy", ++$O)
+		"CFG.Enable" = @("ON",
+			"CFG: enable Control Flow Guard", ++$O)
+		"CFG.SuppressExports" = @("OFF",
+			"CFG: disable export suppression", ++$O)
+		"CFG.StrictControlFlowGuard" = @("OFF",
+			"CFG: disable strict mode", ++$O)
+		"SEHOP.Enable" = @("ON",
+			"SEHOP: validate exception chains", ++$O)
+		"SEHOP.TelemetryOnly" = @("OFF",
+			"SEHOP: disable telemetry-only mode", ++$O)
+		"Heap.TerminateOnError" = @("ON",
+			"Heap: validate heap integrity", ++$O)
+	})
 
 	ReportMulti "Configure Windows SmartScreen" @(
 		@((ConfigureRegistry -item `
