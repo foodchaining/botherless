@@ -754,7 +754,10 @@ function ConfigureBootOption($option, $value) {
 	elseif (!(ArgTackle))
 		{ return $false }
 
-	& $bcdedit "/set" "{current}" $option $value > $null
+	if (EQ $value $VOID)
+		{ & $bcdedit "/deletevalue" "{current}" $option > $null }
+	else
+		{ & $bcdedit "/set" "{current}" $option $value > $null }
 	if (! $?)
 		{ return $ERRSET }
 
@@ -995,13 +998,23 @@ function ConfigureAll {
 	ReportMulti "Configure and run Windows Defender Application Control" `
 		(ConfigureWDAC)
 
-	Report (ConfigureBootOption -option "nx" -value "AlwaysOn") `
-		"Enable DEP for the operating system and all processes"
+	$reports = @(
+		@((ConfigureBootOption -option "recoveryenabled" -value "Yes"),
+			"Enable Windows Recovery Environment"),
+		@((ConfigureBootOption -option "bootstatuspolicy" -value $VOID),
+			"Set Recovery Environment trigger to its default configuration"),
+		@((ConfigureBootOption -option "nx" -value "AlwaysOn"),
+			"Enable DEP for the operating system and all processes")
+	)
 
 	if (!(HasSecureBoot)) {
-		Report (ConfigureBootOption -option "nointegritychecks" -value "No") `
-			"Enable Driver Signature Enforcement"
+		$reports += @(, @((ConfigureBootOption -option "testsigning" `
+			-value $VOID), "Disable test-signed kernel-mode drivers"))
+		$reports += @(, @((ConfigureBootOption -option "nointegritychecks" `
+			-value $VOID), "Enable Driver Signature Enforcement"))
 	}
+
+	ReportMulti "Configure security-related boot time settings" $reports
 
 	if (HasHypervisor) {
 		$reports = @(
