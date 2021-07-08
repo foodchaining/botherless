@@ -65,19 +65,19 @@ function ArgNoAutoRebootWithLoggedOnUsers {
 	return $BLFlags -icontains "-NoAutoRebootWithLoggedOnUsers"
 }
 
-function ArgAuditPrevalenceAgeOrTrustedListCriterion {
-	return $BLFlags -icontains "-AuditPrevalenceAgeOrTrustedListCriterion"
+function ArgIgnoreReputationCriterion {
+	return $BLFlags -icontains "-IgnoreReputationCriterion"
 }
 
-function GetDesiredPrevalenceAgeOrTrustedListCriterion {
-	if (ArgAuditPrevalenceAgeOrTrustedListCriterion)
+function GetDesiredReputationCriterion {
+	if (! (ArgIgnoreReputationCriterion))
 		{ return 2 }
 	else
 		{ return 0 }
 }
 
-function GetDesiredPrevalenceAgeOrTrustedListCriterionDescription {
-	if (ArgAuditPrevalenceAgeOrTrustedListCriterion)
+function GetDesiredReputationCriterionDescription {
+	if (! (ArgIgnoreReputationCriterion))
 		{ return ("Audit executable files upon running unless they " +
 			"meet a prevalence, age, or trusted list criterion") }
 	else
@@ -946,7 +946,7 @@ function ConfigureAll {
 		"-AllowRestrictedUserMode" = ""
 		"-ForceRelocateImages" = ""
 		"-NoAutoRebootWithLoggedOnUsers" = ""
-		"-AuditPrevalenceAgeOrTrustedListCriterion" = ""
+		"-IgnoreReputationCriterion" = ""
 		"-HighPlusBlockingLevel" = ""
 	}
 
@@ -1019,7 +1019,7 @@ function ConfigureAll {
 	if (HasHypervisor) {
 		$reports = @(
 			@((ConfigureBootOption -option "hypervisorlaunchtype" `
-				-value "Auto"), "Enable VBS boot option"),
+				-value $VOID), "Enable VBS boot option"),
 			@((ConfigureRegistry -item `
 				"HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" `
 				-property "EnableVirtualizationBasedSecurity" `
@@ -1102,8 +1102,8 @@ function ConfigureAll {
 		"BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550" = @(1,
 			("Block executable content from email client and webmail"), ++$O)
 		"01443614-CD74-433A-B99E-2ECDC07BFC25" = @(
-			(GetDesiredPrevalenceAgeOrTrustedListCriterion),
-			(GetDesiredPrevalenceAgeOrTrustedListCriterionDescription), ++$O)
+			(GetDesiredReputationCriterion),
+			(GetDesiredReputationCriterionDescription), ++$O)
 		"5BEB7EFE-FD9A-4556-801D-275E5FFC04CC" = @(1,
 			("Block execution of potentially obfuscated scripts"), ++$O)
 		"D3E037E1-3EB8-44C8-A917-57927947596D" = @(1,
