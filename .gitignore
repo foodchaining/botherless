@@ -6,5 +6,6 @@
 !/.gitattributes
 !/.gitignore
 !/botherless.cmd
+!/bsstool.ps1
 !/lolbins.xml
 !/README.md
