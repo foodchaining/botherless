@@ -687,6 +687,18 @@ function ConfirmConstrainedMode {
 		-and ("ConstrainedLanguage" -ieq $langmode[1])
 }
 
+function ConfirmLOLBinsBlocked {
+	$wmic = "$env:windir\System32\wbem\WMIC.exe"
+	try {
+		$null = & $wmic "/?"
+		if ($?)
+			{ return $false }
+	} catch
+		[System.Management.Automation.ApplicationFailedException]
+		{ return $true }
+	return $VOID
+}
+
 function GetBinaryContent($path) {
 	return Get-Content -Path $path -Raw -Encoding "Byte"
 }
@@ -1838,6 +1850,8 @@ function ConfigureAll {
 	$reports = @(
 		@((PCCheck (ConfirmConstrainedMode)),
 			"PowerShell is configured to run in Constrained Language mode"),
+		@((PCCheck (ConfirmLOLBinsBlocked)),
+			"Blocking of `"Living Off the Land`" binaries is active"),
 		@((PCCheck (EQ $AMStatus.AMServiceEnabled $true)),
 			"Antimalware Engine is enabled"),
 		@((PCCheck (EQ $AMStatus.AntispywareEnabled $true)),
