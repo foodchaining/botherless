@@ -811,6 +811,23 @@ function ConfigureRegistry($item, $property, $type, $value) {
 	return (CEQ $got $value) -and (EqualKinds $got $value)
 }
 
+function ConfigureRegistryMulti($entries) {
+
+	$outcome = $null
+	$outCode = -1
+
+	foreach ($entry in $entries) {
+		$report = ConfigureRegistry @entry
+		$code = ReportToInt $report
+		if ($code -gt $outCode) {
+			$outcome = $report
+			$outCode = $code
+		}
+	}
+
+	return $outcome
+}
+
 function ConfigureSecurityPolicy($conf) {
 
 	$desired = @{}
@@ -1403,23 +1420,21 @@ function ConfigureAll {
 
 	ReportMulti "Restrict Windows scripting environment" @(
 		@((ConfigurePowerShellPolicy -value "Restricted"),
-			"(1/3) Restrict PowerShell execution policy"),
-		@((ConfigureRegistry -item `
-			"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell" `
-			-property "ExecutionPolicy" -type "String" -value "Restricted"),
-			"(2/3) Restrict PowerShell execution policy"),
-		@((ConfigureRegistry -item `
-			"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell" `
-			-property "EnableScripts" -type "DWord" -value 0),
-			"(3/3) Restrict PowerShell execution policy"),
-		@((ConfigureRegistry -item `
-			"HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings" `
-			-property "Enabled" -type "DWord" -value 0),
-			"(1/2) Disable Windows Script Host"),
-		@((ConfigureRegistry -item ("HKLM:\SOFTWARE\" +
-				"WOW6432Node\Microsoft\Windows Script Host\Settings") `
-			-property "Enabled" -type "DWord" -value 0),
-			"(2/2) Disable Windows Script Host")
+			"(1/2) Restrict PowerShell execution policy"),
+		@((ConfigureRegistryMulti @(
+			@{"item" = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell"
+				"property" = "ExecutionPolicy"; "type" = "String"; "value" =
+				"Restricted"},
+			@{"item" = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell"
+				"property" = "EnableScripts"; "type" = "DWord"; "value" = 0})),
+			"(2/2) Restrict PowerShell execution policy"),
+		@((ConfigureRegistryMulti @(
+			@{"item" = "HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings"
+				"property" = "Enabled"; "type" = "DWord"; "value" = 0},
+			@{"item" = ("HKLM:\SOFTWARE\" +
+				"WOW6432Node\Microsoft\Windows Script Host\Settings")
+				"property" = "Enabled"; "type" = "DWord"; "value" = 0})),
+			"Disable Windows Script Host")
 	)
 
 	Report (ConfigureRegistry -item ("HKLM:\SYSTEM\CurrentControlSet\" +
@@ -1702,14 +1717,16 @@ function ConfigureAll {
 			"HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" `
 			-property "EnableMulticast" -type "DWord" -value 0),
 			"Disable link local multicast name resolution"),
-		@((ConfigureRegistry -item `
-			"HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" `
-			-property "DisableIPSourceRouting" -type "DWord" -value 2),
-			"Prevent IP source routing"),
-		@((ConfigureRegistry -item `
-			"HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" `
-			-property "DisableIPSourceRouting" -type "DWord" -value 2),
-			"Prevent IPv6 source routing"),
+		@((ConfigureRegistryMulti @(
+			@{"item" =
+				"HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters"
+				"property" = "DisableIPSourceRouting"; "type" = "DWord"
+				"value" = 2},
+			@{"item" =
+				"HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters"
+				"property" = "DisableIPSourceRouting"; "type" = "DWord"
+				"value" = 2})),
+			"Prevent IPv4/IPv6 source routing"),
 		@((ConfigureRegistry -item `
 			"HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" `
 			-property "EnableICMPRedirect" -type "DWord" -value 0),
