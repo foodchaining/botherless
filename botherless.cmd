@@ -1392,12 +1392,12 @@ function ConfigureAll {
 			$reports += @(, @((ConfigureRegistry -item `
 				"HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" `
 				-property "RequirePlatformSecurityFeatures" `
-				-type "DWord" -value 1), "Require Secure Boot with DMA"))
+				-type "DWord" -value 3), "Require Secure Boot with DMA"))
 		} elseif (HasSecureBoot) {
 			$reports += @(, @((ConfigureRegistry -item `
 				"HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard" `
 				-property "RequirePlatformSecurityFeatures" `
-				-type "DWord" -value 3), "Require Secure Boot"))
+				-type "DWord" -value 1), "Require Secure Boot"))
 		}
 		ReportMulti "Enable Virtualization Based Security" $reports
 	}
